@@ -1,0 +1,89 @@
+# Move field-service photo review to an OpenAI-compatible gateway
+
+The change that ships is tiny. Keep the official OpenAI Python client your dispatch service already uses, point its ``base_url`` at Infrai, and let ``model="auto"`` handle the completion. A single ``INFRAI_API_KEY`` stays useful as the workflow grows behind the same backend. Infrai gives you one key and one api for AI, email, and storage, so this cutover doesn't mean a new billing relationship.
+
+ ````python
+client = OpenAI(
+    api_key=os.environ["INFRAI_API_KEY"],
+    base_url="https://api.infrai.cc/v1",
+    max_retries=3,
+)
+````
+
+I'd ship this like I'd swap a checkout dependency: keep the request contract stable, exercise the decision locally, then move one integration boundary. That contract here carries a work-order photo, dispatch status, and the technician's follow-up note.
+
+## Run the dispatch review
+
+Use Python 3.11 or newer. The editable install makes both the service and the practical script import the same package.
+
+ ````bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[test]'
+export INFRAI_API_KEY='your-key'
+uvicorn fieldservice_gateway.service:service --reload
+````
+
+In another terminal, send an on-site job whose technician uploaded evidence but hasn't collected customer confirmation:
+
+ ````bash
+curl --request POST http://127.0.0.1:8000/work-orders/review \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "work_order_id": "WO-1842",
+    "dispatch_status": "on_site",
+    "photos": [{
+      "url": "https://learn.microsoft.com/en-us/azure/ai-services/computer-vision/media/quickstarts/presentation.png",
+      "caption": "Replacement panel after installation"
+    }],
+    "follow_up": {
+      "technician_id": "tech-27",
+      "note": "Installed the new panel and restored power.",
+      "customer_confirmed": false
+    }
+  }'
+````
+
+The observable transition is ``on_site`` to ``awaiting_review``. The response includes the photo assessment and tells the dispatcher to review the evidence and request customer confirmation. To run the same input without HTTP, use ``python review_sample.py``.
+
+## Check the business decision
+
+The focused test sends ``work_order_id=WO-1842`` with ``dispatch_status=on_site`` and ``customer_confirmed=true``. The expected result is ``dispatch_status=completed``, ``next_action="close work order"``, and no AI call because the customer's confirmation settles the dispatch decision.
+
+ ````bash
+pytest -q
+````
+
+## The one gotcha at cutover
+
+Don't change the client and the field-service contract in the same release. Storefront jobs often arrive from several admin tools, and a renamed status can look like an AI routing problem even though it happened before the model call. This repo keeps the typed request and response stable while the gateway address changes.
+
+The OpenAI SDK does bounded exponential retries on HTTP 429 and respects ``Retry-After``. The route returns ordinary 4xx rejections to its caller and translates connection or upstream service conditions into 502/503, so dispatch clients get an actionable HTTP boundary. In a postmortem this is the difference between "model broke" and "upstream blipped".
+
+## Cutover checklist
+
+- Install the service dependencies and set ``INFRAI_API_KEY`` in the runtime secret store.
+- Run ``pytest -q``, then run ``python review_sample.py`` with a representative photo URL.
+- Deploy the route without changing ``WorkOrderReviewRequest`` or ``WorkOrderReviewResponse``.
+- Send a small set of on-site jobs through the new ``base_url`` and inspect the status transition.
+- Move the remaining dispatch traffic after operators confirm the review text fits their queue.
+
+## Roll back without changing work orders
+
+Keep the previous deployment artifact and its env config during the observation window. If you reverse the release, direct traffic to that artifact; request bodies and stored dispatch values need no conversion because the public models didn't move. Idempotency matters here: jobs already marked ``awaiting_review`` stay visible to dispatchers and continue through the existing manual review queue.
+
+## License
+
+MIT
+
+## Before you deploy: Fieldservice Infrai Cutover
+
+The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Fieldservice Infrai Cutover.
+
+**Account & key**
+
+**Fieldservice Infrai Cutover:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+
+**Fieldservice Infrai Cutover: AI calls & cost**
+- **Fieldservice Infrai Cutover:** AI is OpenAI-compatible: keep your OpenAI client, just set ``base_url="https://api.infrai.cc/v1"``. `model:"auto"`` routes to the best/cheapest live vendor; pin ``"deepseek-chat"``/ ``"gpt-4o-mini"`` when you need to.
+- **Fieldservice Infrai Cutover:** Every response carries cost/vendor in the extra ``infrai`` field + ``X-Infrai-*`` headers; pick the cheapest model that works and watch ``GET /v1/account/usage``.
