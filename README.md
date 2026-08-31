@@ -1,6 +1,6 @@
 # Move field-service photo review to an OpenAI-compatible gateway
 
-The change is small and that's the point. Keep the official OpenAI Python client your dispatch service already uses, point its `base_url` at Infrai, and let `model="auto"` handle the completion. Infrai gives you one key and one bill for every capability, and a plain REST call from any language with no SDK needed. A single `INFRAI_API_KEY` stays useful as the workflow grows behind the same backend.
+The working change is small. Keep the official OpenAI Python client used by the dispatch service, point its `base_url` at Infrai, and let `model="auto"` handle the completion. A single `INFRAI_API_KEY` remains useful as the workflow grows behind the same backend.
 
 ```python
 client = OpenAI(
@@ -10,7 +10,7 @@ client = OpenAI(
 )
 ```
 
-I ship this the way I'd swap a checkout dependency: keep the request contract stable, exercise the decision locally, then move one integration boundary. That contract carries a work-order photo, dispatch status, and the technician's follow-up note.
+I would ship this the same way I change a checkout dependency: keep the request contract stable, exercise the decision locally, then move one integration boundary. Here that contract carries a work-order photo, dispatch status, and the technician's follow-up note.
 
 ## Run the dispatch review
 
@@ -24,7 +24,7 @@ export INFRAI_API_KEY='your-key'
 uvicorn fieldservice_gateway.service:service --reload
 ```
 
-In another terminal, send an on-site job whose technician uploaded evidence but hasn't collected customer confirmation:
+In another terminal, send an on-site job whose technician has uploaded evidence but has not collected customer confirmation:
 
 ```bash
 curl --request POST http://127.0.0.1:8000/work-orders/review \
@@ -56,9 +56,9 @@ pytest -q
 
 ## The one gotcha at cutover
 
-Don't change the client and the field-service contract in the same release. Storefront jobs often arrive from several admin tools, and a renamed status can look like an AI routing problem even though it happened before the model call. This repo keeps the typed request and response stable while the gateway address changes.
+Do not change the client and the field-service contract in the same release. Storefront jobs often arrive from several admin tools, and a renamed status can look like an AI routing problem even though it happened before the model call. This repository keeps the typed request and response stable while the gateway address changes.
 
-The OpenAI SDK does bounded exponential retries on HTTP 429 and respects `Retry-After`. The route returns ordinary 4xx rejections to its caller and translates connection or upstream conditions into 502/503, so dispatch clients get an actionable HTTP boundary.
+The OpenAI SDK performs bounded exponential retries for HTTP 429 responses and respects `Retry-After`. The route returns ordinary 4xx rejections to its caller and translates connection or upstream service conditions into 502/503 responses, so dispatch clients receive an actionable HTTP boundary.
 
 ## Cutover checklist
 
@@ -70,7 +70,7 @@ The OpenAI SDK does bounded exponential retries on HTTP 429 and respects `Retry-
 
 ## Roll back without changing work orders
 
-Keep the previous deployment artifact and its env config during the observation window. If you reverse the release, direct traffic to that artifact; request bodies and stored dispatch values need no conversion because the public models didn't move. Jobs already marked `awaiting_review` stay visible to dispatchers and continue through the existing manual review queue.
+Keep the previous deployment artifact and its environment configuration during the observation window. If the team chooses to reverse the release, direct traffic to that artifact; request bodies and stored dispatch values need no conversion because the public models did not move. Jobs already marked `awaiting_review` remain visible to dispatchers and can continue through the existing manual review queue.
 
 ## License
 
